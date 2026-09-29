@@ -7,7 +7,7 @@ from datetime import datetime
 import time
 
 from .collector import Collector, Snapshot
-from .ui import MonitorApp, display_metrics, display_value, metric_groups
+from .formatting import display_metrics, display_value, metric_groups
 
 
 def format_snapshot(snapshot: Snapshot) -> str:
@@ -38,4 +38,7 @@ def main() -> None:
         time.sleep(1)
         print(format_snapshot(collector.sample()))
     else:
+        # Imported here so `--once` does not need Textual.
+        from .ui import MonitorApp
+
         MonitorApp().run()

@@ -14,7 +14,7 @@ sysvigil            # dashboard
 sysvigil --once     # one-second snapshot, printed as text
 ```
 
-From a checkout without installing, run `python3 -m sysvigil`. Textual can live in `.vendor/` (the local test setup), and `psutil` comes from the system Python (`sudo dnf install python3-psutil` on Fedora).
+From a checkout without installing, run `python3 -m sysvigil`. Textual can live in `.vendor/` (the local test setup), and `psutil` comes from the system Python (`sudo dnf install python3-psutil` on Fedora). `--once` needs only `psutil`.
 
 ## Using the dashboard
 

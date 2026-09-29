@@ -22,6 +22,7 @@ from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane
 
 from .collector import Collector, Metric, ProcessRow, Snapshot
+from .formatting import display_metrics, display_value, duration
 
 
 SPARKS = "▁▂▃▄▅▆▇█"
@@ -54,17 +55,6 @@ WIDE_COLUMNS = (("PID", "pid"), ("Process", "name"), ("User", "user"), ("CPU %",
 PROCESS_COLUMNS = COMPACT_COLUMNS
 
 
-def duration(seconds: float) -> str:
-    minutes = int(seconds) // 60
-    days, minutes = divmod(minutes, 24 * 60)
-    hours, minutes = divmod(minutes, 60)
-    if days:
-        return f"{days} d {hours} h"
-    if hours:
-        return f"{hours} h {minutes} min"
-    return f"{minutes} min"
-
-
 def human_rate(mib_s: float | None) -> str:
     if mib_s is None:
         return "—"
@@ -82,40 +72,6 @@ def human_mib(mib: float | None) -> str:
     if mib >= 1024:
         return f"{mib / 1024:.1f} GiB"
     return f"{mib:.1f} MiB" if mib < 10 else f"{mib:.0f} MiB"
-
-
-def display_value(label: str, metric: Metric) -> str:
-    if metric.value is None or metric.value == "":
-        return "Fan speed unavailable" if label == "Fan speed" else f"unavailable ({metric.unit})"
-    if metric.unit == "s" and isinstance(metric.value, (int, float)):
-        return duration(metric.value)
-    if isinstance(metric.value, float):
-        return f"{metric.value:.2f} {metric.unit}"
-    if metric.unit in ("state", "device"):
-        return str(metric.value)
-    return f"{metric.value} {metric.unit}"
-
-
-def metric_groups(metrics: dict[str, Metric]) -> tuple[list[str], list[str]]:
-    main = [name for name in metrics if name.startswith(("CPU usage", "RAM ", "Swap ", "Root disk ", "Disk ", "Network "))]
-    return main, [name for name in metrics if name not in main]
-
-
-def display_metrics(snapshot: Snapshot) -> dict[str, Metric]:
-    """Replace missing fan provider rows with one truthful status."""
-    result = {name: metric for name, metric in snapshot.metrics.items()
-              if not (name.startswith("Fan ") or name.startswith("MSI EC "))}
-    rpm = [(name, metric) for name, metric in snapshot.metrics.items()
-           if name.startswith("Fan ") and metric.value is not None]
-    ec = [(name, metric) for name, metric in snapshot.metrics.items()
-          if name.startswith("MSI EC ") and metric.value is not None]
-    for name, metric in rpm + ec:
-        result[name] = metric
-    if not rpm:
-        sources = [metric.source for name, metric in snapshot.metrics.items()
-                   if name.startswith(("Fan ", "MSI EC "))]
-        result["Fan speed"] = Metric(None, "RPM", "; ".join(sources))
-    return result
 
 
 def metric_names(snapshot: Snapshot, group: str, metrics: dict[str, Metric] | None = None) -> list[str]:
