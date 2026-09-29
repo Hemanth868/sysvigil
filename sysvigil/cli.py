@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime
 import time
 
+from . import __version__
 from .collector import Collector, Snapshot
 from .formatting import display_metrics, display_value, metric_groups
 
@@ -31,6 +32,7 @@ def format_snapshot(snapshot: Snapshot) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="sysvigil", description="Read-only Linux resource monitor")
     parser.add_argument("--once", action="store_true", help="print a one-second snapshot and exit")
+    parser.add_argument("--version", action="version", version=f"sysvigil {__version__}")
     args = parser.parse_args()
     if args.once:
         collector = Collector()

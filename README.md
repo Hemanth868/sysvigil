@@ -6,13 +6,29 @@ sysvigil shows a full-screen [Textual](https://textual.textualize.io/) dashboard
 
 It was built on an MSI Bravo 15 (Ryzen with Renoir iGPU, Radeon RX 5500M) running Fedora, and works on other Linux machines; hardware it can't find shows as unavailable.
 
-## Install and run
+## Install
+
+One command, no root needed:
 
 ```sh
-python -m pip install .
+curl -fsSL https://raw.githubusercontent.com/Hemanth868/sysvigil/main/install.sh | sh
+```
+
+or from a checkout:
+
+```sh
+git clone https://github.com/Hemanth868/sysvigil && cd sysvigil && ./install.sh
+```
+
+Then run `sysvigil` in any terminal, from any directory, or open **sysvigil** from the app menu:
+
+```sh
 sysvigil            # dashboard
 sysvigil --once     # one-second snapshot, printed as text
+sysvigil --version
 ```
+
+The installer needs Python 3.10 or newer and internet access for the two dependencies, psutil and Textual. It installs them into a private environment in `~/.local/share/sysvigil`, so the system Python is left alone, and links the command into `~/.local/bin`. If that directory is not on PATH yet (Fedora's default `.bashrc` already adds it), the installer adds it to your shell's startup file (`.bashrc`, `.zshrc`, fish's `conf.d`, or `.profile`); open a new terminal afterwards. Run the installer again to upgrade, and `./install.sh --uninstall` (or `curl … | sh -s -- --uninstall`) to remove sysvigil. `--no-menu` skips the app-menu entry, and `--no-modify-path` leaves shell files alone. On Debian or Ubuntu, install `python3-venv` first. With pipx, `pipx install git+https://github.com/Hemanth868/sysvigil` works too.
 
 From a checkout without installing, run `python3 -m sysvigil`. Textual can live in `.vendor/` (the local test setup), and `psutil` comes from the system Python (`sudo dnf install python3-psutil` on Fedora). `--once` needs only `psutil`.
 

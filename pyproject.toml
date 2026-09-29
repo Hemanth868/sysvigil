@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sysvigil"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Read-only terminal resource monitor for Linux"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,6 +15,9 @@ Repository = "https://github.com/Hemanth868/sysvigil"
 
 [project.scripts]
 sysvigil = "sysvigil.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "sysvigil.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["sysvigil*"]

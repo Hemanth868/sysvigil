@@ -22,3 +22,9 @@ def test_snapshot_text_lists_values_sources_and_top_processes() -> None:
 def test_once_does_not_import_textual() -> None:
     code = "import sys, sysvigil.cli; assert 'textual' not in sys.modules, 'textual imported'"
     subprocess.run([sys.executable, "-c", code], check=True, cwd=Path(__file__).resolve().parents[1])
+
+
+def test_version_flag() -> None:
+    result = subprocess.run([sys.executable, "-m", "sysvigil", "--version"], capture_output=True, text=True,
+                            check=True, cwd=Path(__file__).resolve().parents[1])
+    assert result.stdout.strip().startswith("sysvigil ")
