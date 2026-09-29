@@ -261,6 +261,13 @@ def value(snapshot: Snapshot, name: str) -> float | None:
     return float(metric.value) if metric and isinstance(metric.value, (int, float)) else None
 
 
+def summed_value(snapshot: Snapshot, *names: str) -> float | None:
+    """A sum is unavailable when any part is, as in the summed graphs."""
+    parts = [value(snapshot, name) for name in names]
+    known = [part for part in parts if part is not None]
+    return sum(known) if len(known) == len(parts) else None
+
+
 def number(snapshot: Snapshot, name: str, digits: int = 1) -> str:
     current = value(snapshot, name)
     return f"{current:.{digits}f}" if current is not None else "—"
@@ -549,7 +556,7 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
     devices = _devices(s, "Disk read")
     cards["disk"] = CardData(
         "disk", f"DISK · {devices}" if devices else "DISK",
-        human_rate(sum(filter(None, (value(s, "Disk read"), value(s, "Disk write"))))),
+        human_rate(summed_value(s, "Disk read", "Disk write")),
         "read + write", disk_series, scale=None, pairs=[
             ("Read", human_rate(value(s, "Disk read"))),
             ("Write", human_rate(value(s, "Disk write"))),
@@ -561,7 +568,7 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
     devices = _devices(s, "Network receive")
     cards["net"] = CardData(
         "net", f"NETWORK · {devices}" if devices else "NETWORK",
-        human_rate(sum(filter(None, (value(s, "Network receive"), value(s, "Network send"))))),
+        human_rate(summed_value(s, "Network receive", "Network send")),
         "down + up", net_series, scale=None, pairs=[
             ("Receive", human_rate(value(s, "Network receive"))),
             ("Send", human_rate(value(s, "Network send"))),

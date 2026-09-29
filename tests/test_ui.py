@@ -6,7 +6,7 @@ from textual.widgets import DataTable, Static, TabbedContent
 from sysvigil.collector import Metric, ProcessRow, Snapshot
 from sysvigil.ui import (
     Card, History, MonitorApp, area_graph, bar, display_metrics, fan_status,
-    human_rate, metric_names, pair_rows, sorted_processes, sparkline,
+    human_rate, metric_names, overview_cards, pair_rows, sorted_processes, sparkline,
 )
 
 
@@ -106,6 +106,18 @@ def test_missing_fans_collapse_and_percent_is_separate() -> None:
     data.metrics["MSI EC CPU fan"] = Metric(72, "%", "/sys/msi_cpu")
     assert display_metrics(data)["MSI EC CPU fan"].unit == "%"
     assert "72 %" in fan_status(data)[1]
+
+
+def test_unavailable_disk_and_network_totals_are_not_shown_as_zero() -> None:
+    data = snapshot()
+    data.metrics["Disk read"] = Metric(None, "MiB/s", "/proc/diskstats (no hardware devices)")
+    data.metrics["Network send"] = Metric(None, "MiB/s", "/proc/net/dev (no hardware devices)")
+    history = History()
+    history.add(data)
+    cards = overview_cards(data, history)
+    assert cards["disk"].value == "—"
+    assert cards["net"].value == "—"
+    assert overview_cards(snapshot(), history)["disk"].value == "1.5 MiB/s"
 
 
 def test_sorting_uses_all_processes_and_keeps_missing_last() -> None:
