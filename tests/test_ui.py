@@ -64,6 +64,11 @@ class FakeCollector:
         return snapshot()
 
 
+class BrokenCollector(FakeCollector):
+    def sample(self) -> Snapshot:
+        raise OSError("/proc\nis unreadable")
+
+
 def test_history_is_60_seconds_and_sparkline_has_fixed_width() -> None:
     history = History()
     history.add(snapshot(100))
@@ -207,6 +212,26 @@ def test_layout_follows_a_terminal_resize() -> None:
             await pilot.pause()
             assert app.screen.has_class("compact")
             assert len(table.columns) == 5
+
+    asyncio.run(check())
+
+
+def test_sampling_errors_show_in_the_header_until_a_sample_succeeds() -> None:
+    async def check() -> None:
+        app = MonitorApp(BrokenCollector())
+        async with app.run_test(size=(120, 30)) as pilot:
+            stamp = app.query_one("#stamp", Static)
+            await app.workers.wait_for_complete()  # the priming sample
+            app.sample_in_background()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "sampling failed · OSError: /proc is unreadable" in str(stamp.content)
+            app.collector = FakeCollector()
+            app.sample_in_background()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "sampling failed" not in str(stamp.content)
+            assert "1 s refresh" in str(stamp.content)
 
     asyncio.run(check())
 

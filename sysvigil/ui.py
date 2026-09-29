@@ -664,6 +664,7 @@ class MonitorApp(App):
         self._table_layout: tuple[int, bool] | None = None
         self._primed = False
         self._sampling = False
+        self._sample_error: str | None = None
         uname = os.uname()
         self._host = f"{uname.nodename} · Linux {uname.release.split('-')[0]}"
 
@@ -795,6 +796,10 @@ class MonitorApp(App):
                 self._primed = True
                 return
             snapshot = self.collector.sample()
+        except Exception as error:
+            # Keep running and retry next tick, but say the data is stale.
+            self.call_from_thread(self.report_sample_error, error)
+            return
         finally:
             self._sampling = False
         self.call_from_thread(self.apply_snapshot, snapshot)
@@ -803,7 +808,12 @@ class MonitorApp(App):
         """Sample on the calling thread; the timer uses sample_in_background."""
         self.apply_snapshot(self.collector.sample())
 
+    def report_sample_error(self, error: Exception) -> None:
+        self._sample_error = " ".join(f"{type(error).__name__}: {error}".split())
+        self.render_stamp()
+
     def apply_snapshot(self, snapshot: Snapshot) -> None:
+        self._sample_error = None
         self.latest = snapshot
         self.history.add(snapshot)
         self.render_overview()
@@ -830,13 +840,16 @@ class MonitorApp(App):
         uptime = value(self.latest, "Uptime") if self.latest else None
         if uptime is not None:
             stamp.append(f"   up {duration(uptime)}", style=LABEL)
-        if self.latest is None:
-            right = "collecting first sample…"
+        if self._sample_error is not None:
+            right = Text(f"sampling failed · {self._sample_error}", style=CRIT)
+        elif self.latest is None:
+            right = Text("collecting first sample…", style=LABEL)
         else:
             now = datetime.fromtimestamp(self.latest.timestamp).astimezone()
-            right = f"1 s refresh   {now:%H:%M:%S %Z}"
-        stamp.append(" " * max(2, self.size.width - 2 - stamp.cell_len - len(right)))
-        stamp.append(right, style=LABEL)
+            right = Text(f"1 s refresh   {now:%H:%M:%S %Z}", style=LABEL)
+        right.truncate(max(1, self.size.width - 4 - stamp.cell_len), overflow="ellipsis")
+        stamp.append(" " * max(2, self.size.width - 2 - stamp.cell_len - right.cell_len))
+        stamp.append_text(right)
         self.query_one("#stamp", Static).update(stamp)
 
     def render_overview(self) -> None:
