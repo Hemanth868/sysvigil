@@ -101,11 +101,16 @@ def percentage(part: int | float | None, total: int | float | None) -> float | N
 
 def battery_power_w(status: str | None, power_uw: int | None,
                     current_ua: int | None, voltage_uv: int | None) -> float | None:
-    """Positive is charging; negative is discharging; zero means idle."""
-    if power_uw is not None and power_uw >= 0:
-        watts = power_uw / 1_000_000
-    elif current_ua is not None and voltage_uv is not None and current_ua >= 0 and voltage_uv >= 0:
-        watts = current_ua * voltage_uv / 1_000_000_000_000
+    """Positive is charging; negative is discharging; zero means idle.
+
+    Some drivers report a signed current or power (negative while
+    discharging) and others an unsigned one, so the direction comes from
+    `status` and only the magnitude from the reading.
+    """
+    if power_uw is not None:
+        watts = abs(power_uw) / 1_000_000
+    elif current_ua is not None and voltage_uv is not None and voltage_uv >= 0:
+        watts = abs(current_ua) * voltage_uv / 1_000_000_000_000
     else:
         return None
     if status == "Charging":

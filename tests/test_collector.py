@@ -107,6 +107,11 @@ def test_percentages_and_battery_power_direction() -> None:
     assert battery_power_w("Not charging", None, 0, 12_000_000) == 0
     assert battery_power_w("Not charging", 4_000_000, None, None) is None
     assert battery_power_w("Unknown", 4_000_000, None, None) is None
+    # Drivers that sign their readings: direction still comes from status.
+    assert battery_power_w("Discharging", None, -1_500_000, 12_000_000) == -18
+    assert battery_power_w("Discharging", -9_000_000, None, None) == -9
+    assert battery_power_w("Charging", None, 1_500_000, 12_000_000) == 18
+    assert battery_power_w("Discharging", None, 1_500_000, -12_000_000) is None
 
 
 def test_battery_power_fallback_and_missing_sensor(tmp_path: Path) -> None:
