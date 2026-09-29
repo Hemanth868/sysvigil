@@ -5,8 +5,9 @@ from textual.widgets import DataTable, Static, TabbedContent
 
 from sysvigil.collector import Metric, ProcessRow, Snapshot
 from sysvigil.ui import (
-    Card, History, MonitorApp, area_graph, bar, display_metrics, fan_status,
-    human_rate, metric_names, overview_cards, pair_rows, sorted_processes, sparkline,
+    ACCENT, BATTERY_LEVELS, CRIT, USAGE_LEVELS, Card, History, MonitorApp, area_graph, bar,
+    display_metrics, fan_status, human_rate, metric_names, overview_cards, pair_rows, severity,
+    sorted_processes, sparkline, watch_alerts,
 )
 
 
@@ -78,7 +79,7 @@ def test_history_is_60_seconds_and_sparkline_has_fixed_width() -> None:
     assert len(sparkline([1, 2, 3], 8)) == 8
     assert sparkline([None], 3).endswith("·")
     assert len(sparkline(list(range(60)), 20)) == 20
-    assert bar(0, 8) == "╍" * 8
+    assert bar(0, 8) == "─" * 8
     assert bar(100, 8) == "━" * 8
     assert bar(None, 8) == "·" * 8
 
@@ -88,6 +89,40 @@ def test_area_graph_fills_from_the_bottom_and_marks_missing_samples() -> None:
     # Padding and the missing sample show a floor; zero is still visible.
     assert lines == ["    █", "▁▁▁██"]
     assert area_graph([5, 10], 4, 3, None, "white")[0].plain.endswith("█")  # auto scale peaks at max
+
+
+def test_graph_ridges_take_a_status_colour_past_their_levels() -> None:
+    top = area_graph([10, 99], 2, 2, (0, 100), ACCENT, USAGE_LEVELS)[0]
+    assert top.plain == " █"
+    assert any(CRIT in str(span.style) for span in top.spans)
+    calm = area_graph([10, 99], 2, 2, (0, 100), ACCENT)[0]
+    assert not any(CRIT in str(span.style) for span in calm.spans)
+
+
+def test_severity_levels_and_the_watch_line() -> None:
+    assert severity(79, USAGE_LEVELS) is None
+    assert severity(80, USAGE_LEVELS) == "warn"
+    assert severity(95, USAGE_LEVELS) == "crit"
+    assert severity(15, BATTERY_LEVELS) == "warn"
+    assert severity(10, BATTERY_LEVELS) == "crit"
+    assert severity(None, USAGE_LEVELS) is None
+    data = snapshot(1000)
+    history = History()
+    history.add(data)
+    assert watch_alerts(data, history) == []
+    data.metrics["CPU temperature"] = Metric(96.0, "°C", "/sys/temperature")
+    data.metrics["RAM usage"] = Metric(85.0, "%", "/proc/meminfo")
+    data.metrics["Battery charge"] = Metric(15, "%", "/sys/battery")
+    assert watch_alerts(data, history) == [("crit", "CPU 96 °C"), ("warn", "RAM 85 %")]
+    data.metrics["Battery state"] = Metric("Discharging", "state", "/sys/battery_status")
+    assert ("warn", "Battery 15 %") in watch_alerts(data, history)
+    # CPU load alerts on the last 10 s, so a one-second spike stays quiet.
+    spike = History()
+    for second in range(10):
+        sample = snapshot(2000 + second)
+        sample.metrics["CPU usage"] = Metric(99.0 if second == 9 else 10.0, "%", "/proc/stat")
+        spike.add(sample)
+    assert watch_alerts(sample, spike) == []
 
 
 def test_readable_units_and_pairs_never_cut_labels() -> None:
@@ -163,6 +198,7 @@ def test_layout_at_80x24_and_160x45() -> None:
             assert "VRAM" in str(gpu.render())
             assert "/sys/" not in str(cpu.render())
             assert "unavailable" in str(app.query_one("#card_thermal", Card).render())
+            assert "all quiet" in str(app.query_one("#stamp", Static).content)
             if compact:
                 assert "DISK" in str(io.render()) and "NET" in str(io.render())
                 assert not app.query_one("#card_disk").display

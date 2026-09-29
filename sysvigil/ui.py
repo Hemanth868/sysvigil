@@ -10,6 +10,7 @@ import os
 import re
 import sys
 
+from rich.color import Color
 from rich.table import Table
 from rich.text import Text
 from textual import work
@@ -18,6 +19,7 @@ from textual.containers import Grid
 from textual.driver import Driver
 from textual.drivers.headless_driver import HeadlessDriver
 from textual.markup import escape
+from textual.theme import Theme
 from textual.widget import Widget
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane
 
@@ -35,17 +37,27 @@ HISTORY_SECONDS = 300
 WIDE_MIN_WIDTH = 140
 CARD_MIN_HEIGHT = 8
 
-TEXT = "#e6edf3"
-LABEL = "#8b98a5"
-FAINT = "#4d5a66"
-NORMAL = "#7fa7c4"
-WARN = "#e5b454"
-CRIT = "#f06c6c"
-ACCENTS = {
-    "cpu": "#62b6f7", "memory": "#b692f6", "gpu1": "#4cc9a0", "gpu2": "#9ccf6a",
-    "battery": "#e8c468", "thermal": "#f08a6c", "disk": "#e59ad0", "net": "#6fd3dc",
-}
-CARD_KEYS = tuple(ACCENTS)
+# The look: one signature violet carries every graph over a dark ink surface,
+# so any other colour means a value needs attention. Those status colours are
+# reserved for that and always come with a shape (● ▲ ■) and a label.
+PAGE = "#0c0e16"
+SURFACE = "#121521"
+TEXT = "#eceef8"
+LABEL = "#a6abc3"
+MUTED = "#7d839f"
+FAINT = "#3a3f55"
+ACCENT = "#9085e9"
+GOOD = "#0ca30c"
+WARN = "#fab219"
+CRIT = "#d03b3b"
+STATUS = {"warn": ("▲", WARN), "crit": ("■", CRIT)}
+GLYPH = "◆"
+# (warn, crit) thresholds; a descending pair means lower is worse.
+USAGE_LEVELS = (80.0, 95.0)
+TEMP_LEVELS = (85.0, 95.0)
+DISK_LEVELS = (90.0, 95.0)
+BATTERY_LEVELS = (20.0, 10.0)
+CARD_KEYS = ("cpu", "memory", "gpu1", "gpu2", "battery", "thermal", "disk", "net")
 
 COMPACT_COLUMNS = (("PID", "pid"), ("Process", "name"), ("CPU %", "cpu"),
                    ("RAM", "memory"), ("I/O", "io"))
@@ -53,6 +65,16 @@ WIDE_COLUMNS = (("PID", "pid"), ("Process", "name"), ("User", "user"), ("CPU %",
                 ("RAM", "memory"), ("I/O", "io"), ("Command", "command"))
 # Backwards-compatible name for the compact column set.
 PROCESS_COLUMNS = COMPACT_COLUMNS
+
+
+def mix(color: str, base: str, amount: float) -> str:
+    """`amount` of `color` over `base`, the terminal's stand-in for opacity."""
+    top, bottom = (Color.parse(c).get_truecolor() for c in (color, base))
+    return "#" + "".join(f"{round(a * amount + b * (1 - amount)):02x}" for a, b in zip(top, bottom))
+
+
+BORDER = mix(ACCENT, SURFACE, 0.28)
+TRACK = mix(TEXT, SURFACE, 0.12)
 
 
 def human_rate(mib_s: float | None) -> str:
@@ -103,7 +125,7 @@ def metric_table(snapshot: Snapshot, names: list[str], sources: bool = False,
         if sources:
             cells.append(metric.source)
         elif metric.unit == "%" and isinstance(metric.value, (int, float)):
-            cells.append(Text(bar(metric.value, 30), style=tone(metric.value)))
+            cells.append(meter(metric.value, 30))
         else:
             cells.append("")
         table.add_row(*cells)
@@ -166,11 +188,12 @@ def sparkline(values: list[float | None], width: int) -> str:
 
 def area_graph(values: list[float | None], width: int, height: int,
                scale: tuple[float, float] | None, accent: str,
-               thresholds: bool = False) -> list[Text]:
+               levels: tuple[float, float] | None = None) -> list[Text]:
     """A filled graph, one column per sample, newest on the right.
 
-    With a fixed scale, rows above 75 % and 90 % of it turn amber and red, so
-    load is readable from colour alone. `scale=None` spans zero to the peak.
+    Each column is a bright ridge (its top cell, in eighths) over a dim wash
+    of the same hue. With `levels`, a sample's ridge takes the warn or crit
+    colour. `scale=None` spans zero to the peak.
     """
     if width <= 0 or height <= 0:
         return []
@@ -183,24 +206,28 @@ def area_graph(values: list[float | None], width: int, height: int,
         low, high = scale
     if high <= low:
         high = low + 1
-    levels = height * 8
+    steps = height * 8
     heights = [None if value is None else
-               max(1, round((min(max(value, low), high) - low) * levels / (high - low)))
+               max(1, round((min(max(value, low), high) - low) * steps / (high - low)))
                for value in values]
+    # Glyph and cell background share the wash, so the fill has no seams.
+    wash = mix(accent, SURFACE, 0.22)
+    wash = f"{wash} on {wash}"
+    ridges = [tone(value, levels, normal=accent) for value in values]
     lines = []
     for row in range(height):
         base = (height - 1 - row) * 8
-        middle = (height - row - 0.5) / height
-        color = accent
-        if thresholds:
-            color = CRIT if middle >= 0.9 else WARN if middle >= 0.75 else accent
-        line = Text(style=color)
-        for level in heights:
+        line = Text()
+        for level, ridge in zip(heights, ridges):
             if level is None:
                 # A faint floor marks where samples will appear.
                 line.append("▁" if row == height - 1 else " ", style=FAINT)
+            elif level <= base:
+                line.append(" ")
+            elif level <= base + 8:
+                line.append(BLOCKS[level - base], style=ridge)
             else:
-                line.append(BLOCKS[min(8, max(0, level - base))])
+                line.append("█", style=wash)
         lines.append(line)
     return lines
 
@@ -209,7 +236,14 @@ def bar(percent: float | None, width: int) -> str:
     if percent is None or not math.isfinite(percent):
         return "·" * width
     filled = round(max(0.0, min(100.0, percent)) * width / 100)
-    return "━" * filled + "╍" * (width - filled)
+    return "━" * filled + "─" * (width - filled)
+
+
+def meter(percent: float | None, width: int, levels: tuple[float, float] | None = USAGE_LEVELS) -> Text:
+    """`bar` in colour: the fill in the accent or a status colour, a dim track."""
+    plain = bar(percent, width)
+    filled = plain.count("━")
+    return Text.assemble((plain[:filled], tone(percent, levels)), (plain[filled:], TRACK))
 
 
 def value(snapshot: Snapshot, name: str) -> float | None:
@@ -229,12 +263,30 @@ def number(snapshot: Snapshot, name: str, digits: int = 1) -> str:
     return f"{current:.{digits}f}" if current is not None else "—"
 
 
-def tone(percent: float | None, *, battery: bool = False, normal: str = NORMAL) -> str:
-    if percent is None:
+def severity(current: float | None, levels: tuple[float, float] | None) -> str | None:
+    """"warn", "crit", or None for a value against (warn, crit) thresholds."""
+    if current is None or levels is None:
+        return None
+    warn, crit = levels
+    if warn > crit:  # lower is worse, as for battery charge
+        return "crit" if current <= crit else "warn" if current <= warn else None
+    return "crit" if current >= crit else "warn" if current >= warn else None
+
+
+def tone(current: float | None, levels: tuple[float, float] | None = USAGE_LEVELS, *,
+         normal: str = ACCENT) -> str:
+    if current is None:
         return FAINT
-    if battery:
-        return CRIT if percent <= 10 else WARN if percent <= 20 else normal
-    return CRIT if percent >= 95 else WARN if percent >= 80 else normal
+    level = severity(current, levels)
+    return STATUS[level][1] if level else normal
+
+
+def flagged(text: str, level: str | None, style: str = TEXT) -> Text:
+    """A value that needs attention wears its status shape and colour."""
+    if level is None:
+        return Text(text, style=style)
+    icon, color = STATUS[level]
+    return Text(f"{icon} {text}", style=f"bold {color}")
 
 
 def gpu_cards(snapshot: Snapshot) -> list[str]:
@@ -300,9 +352,9 @@ class CardData:
     aside: str = ""
     series: list[float | None] = field(default_factory=list)
     scale: tuple[float, float] | None = (0, 100)
-    thresholds: bool = False
+    levels: tuple[float, float] | None = None
     pairs: list[tuple[str, str | Text]] = field(default_factory=list)
-    value_style: str = TEXT
+    severity: str | None = None
     footer: str = ""
 
 
@@ -359,11 +411,13 @@ def render_card(data: CardData, width: int, height: int, compact: bool, accent: 
     if width <= 0 or height <= 0:
         return Text()
     lines: list[Text] = []
+    value = flagged(data.value, data.severity, style=f"bold {TEXT}")
     if compact:
         head = Text()
-        head.append(data.title, style=f"bold {accent}")
+        head.append(f"{GLYPH} ", style=accent)
+        head.append(data.title, style=f"bold {LABEL}")
         head.append("  ")
-        head.append(data.value, style=f"bold {data.value_style}")
+        head.append_text(value)
         room = width - head.cell_len - 2
         if room >= 8:
             trace = min(16, room)
@@ -372,7 +426,7 @@ def render_card(data: CardData, width: int, height: int, compact: bool, accent: 
         lines.append(head)
         lines += packed_pairs(data.pairs, width, height - 1)
     else:
-        head = Text(data.value, style=f"bold {data.value_style}")
+        head = value
         if data.aside:
             head.append(" " * max(2, width - head.cell_len - len(data.aside)))
             head.append(data.aside, style=LABEL)
@@ -385,7 +439,7 @@ def render_card(data: CardData, width: int, height: int, compact: bool, accent: 
         if graph_height >= 8:
             lines.append(Text())
             graph_height -= 1
-        lines += area_graph(data.series, width, graph_height, data.scale, accent, data.thresholds)
+        lines += area_graph(data.series, width, graph_height, data.scale, accent, data.levels)
         lines += rows
     for line in lines:
         line.truncate(width, overflow="ellipsis")
@@ -403,16 +457,15 @@ class Card(Widget):
 
     def show(self, data: CardData, compact: bool) -> None:
         self.data, self.compact = data, compact
-        accent = ACCENTS[self.key]
-        self.border_title = None if compact else f"[b {accent}] {escape(data.title)} [/]"
-        self.border_subtitle = None if compact or not data.footer else f"[{LABEL}] {escape(data.footer)} [/]"
+        self.border_title = None if compact else f" [{ACCENT}]{GLYPH}[/] [b {TEXT}]{escape(data.title)}[/] "
+        self.border_subtitle = None if compact or not data.footer else f"[{MUTED}] {escape(data.footer)} [/]"
         self.refresh()
 
     def render(self) -> Text:
         if self.data is None:
             return Text("collecting…", style=LABEL)
         return render_card(self.data, self.content_size.width, self.content_size.height,
-                           self.compact, ACCENTS[self.key])
+                           self.compact, ACCENT)
 
 
 def _devices(snapshot: Snapshot, name: str) -> str:
@@ -431,6 +484,12 @@ def _summed(history: History, *names: str) -> list[float | None]:
     return total
 
 
+def reading(snapshot: Snapshot, name: str, unit: str, levels: tuple[float, float] | None,
+            digits: int = 0) -> Text:
+    """A card value, flagged when it crosses `levels`."""
+    return flagged(f"{number(snapshot, name, digits)} {unit}", severity(value(snapshot, name), levels))
+
+
 def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
     cards: dict[str, CardData] = {}
     s = snapshot
@@ -441,15 +500,15 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
     for index in range(core_count):
         core = value(s, f"CPU core {index} usage")
         strip.append("·" if core is None else SPARKS[min(7, int(core * 8 / 100))],
-                     style=FAINT if core is None else tone(core, normal=ACCENTS["cpu"]))
+                     style=tone(core))
     cards["cpu"] = CardData(
         "cpu", "CPU", f"{number(s, 'CPU usage')} %", f"{number(s, 'CPU frequency', 2)} GHz",
         history.values("CPU usage"), pairs=[
             ("Load 1·5·15 min", f"{number(s, 'CPU load 1m', 2)}  {number(s, 'CPU load 5m', 2)}  {number(s, 'CPU load 15m', 2)}"),
-            ("Temperature", f"{number(s, 'CPU temperature', 0)} °C"),
+            ("Temperature", reading(s, "CPU temperature", "°C", TEMP_LEVELS)),
             (f"{core_count} logical cores", strip),
             ("Pressure (some)", f"{number(s, 'CPU pressure some')} %"),
-        ], value_style=tone(cpu, normal=TEXT), thresholds=True)
+        ], severity=severity(cpu, USAGE_LEVELS), levels=USAGE_LEVELS)
 
     ram = value(s, "RAM usage")
     cards["memory"] = CardData(
@@ -460,7 +519,7 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
             ("Swap", f"{number(s, 'Swap used')} / {number(s, 'Swap total')} GiB  ({number(s, 'Swap usage', 0)} %)"),
             ("Pressure (some)", f"{number(s, 'MEMORY pressure some')} %"),
             ("Pressure (full)", f"{number(s, 'MEMORY pressure full')} %"),
-        ], value_style=tone(ram, normal=TEXT), thresholds=True)
+        ], severity=severity(ram, USAGE_LEVELS), levels=USAGE_LEVELS)
 
     gpus = gpu_cards(s)
     for index in range(2):
@@ -471,7 +530,6 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
             continue
         name = gpus[index]
         prefix = f"GPU {name}"
-        activity = value(s, f"{prefix} activity")
         power_label, power = gpu_power(s, name)
         device = s.metrics.get(f"{prefix} device")
         slot = str(device.value).split(" · ")[-1] if device and device.value else ""
@@ -481,9 +539,9 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
             history.values(f"{prefix} activity"), pairs=[
                 ("VRAM", f"{number(s, f'{prefix} VRAM used', 0)} / {number(s, f'{prefix} VRAM total', 0)} MiB"),
                 (power_label, f"{power} W"),
-                ("Temperature", f"{number(s, f'{prefix} temperature', 0)} °C"),
+                ("Temperature", reading(s, f"{prefix} temperature", "°C", TEMP_LEVELS)),
                 ("Device", f"{name} · {slot}" if slot else name),
-            ], value_style=tone(activity, normal=TEXT), thresholds=True)
+            ])  # a busy GPU is working, not in trouble: no activity levels
 
     charge = value(s, "Battery charge")
     state = s.metrics.get("Battery state")
@@ -494,19 +552,20 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
         history.values("Battery charge"), pairs=[
             ("Power", battery_power_label(s).removeprefix("Power ")),
             ("Uptime", duration(uptime) if uptime is not None else "—"),
-        ], value_style=tone(charge, battery=True, normal=TEXT))
+        ], severity=severity(charge, BATTERY_LEVELS) if state_text == "Discharging" else None)
 
     fan, ec = fan_status(s)
     thermal_pairs: list[tuple[str, str | Text]] = [
-        (f"GPU {index + 1}", f"{number(s, f'GPU {name} temperature', 0)} °C")
+        (f"GPU {index + 1}", reading(s, f"GPU {name} temperature", "°C", TEMP_LEVELS))
         for index, name in enumerate(gpus[:2])]
     thermal_pairs.append(("Fan", fan.replace("Fan speed ", "")))
     thermal_pairs += [(f"Fan {part.split(' ')[0]}", part.split(" ", 2)[-1])
                       for part in ec.split(" · ") if ec]
     cards["thermal"] = CardData(
         "thermal", "TEMPERATURES & FAN", f"CPU {number(s, 'CPU temperature', 0)} °C", fan,
-        history.values("CPU temperature"), scale=(20, 100), thresholds=True,
-        pairs=thermal_pairs, footer="20–100 °C scale")
+        history.values("CPU temperature"), scale=(20, 100), levels=TEMP_LEVELS,
+        pairs=thermal_pairs, severity=severity(value(s, "CPU temperature"), TEMP_LEVELS),
+        footer="20–100 °C scale")
 
     disk_series = _summed(history, "Disk read", "Disk write")
     devices = _devices(s, "Disk read")
@@ -516,7 +575,8 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
         "read + write", disk_series, scale=None, pairs=[
             ("Read", human_rate(value(s, "Disk read"))),
             ("Write", human_rate(value(s, "Disk write"))),
-            ("/ free", f"{number(s, 'Root disk free')} of {number(s, 'Root disk total', 0)} GiB"),
+            ("/ free", flagged(f"{number(s, 'Root disk free')} of {number(s, 'Root disk total', 0)} GiB",
+                               severity(value(s, "Root disk usage"), DISK_LEVELS))),
             ("I/O pressure", f"{number(s, 'IO pressure some')} %"),
         ], footer=f"peak {human_rate(max(filter(None, disk_series), default=0))}")
 
@@ -530,6 +590,30 @@ def overview_cards(snapshot: Snapshot, history: History) -> dict[str, CardData]:
             ("Send", human_rate(value(s, "Network send"))),
         ], footer=f"peak {human_rate(max(filter(None, net_series), default=0))}")
     return cards
+
+
+def watch_alerts(snapshot: Snapshot, history: History) -> list[tuple[str, str]]:
+    """What needs attention, worst first, as (level, text) pairs.
+
+    CPU load counts over the last 10 s, so a one-second spike is not an alert.
+    A busy GPU is not one either; hot or full things are.
+    """
+    s = snapshot
+    recent = [load for load in history.values("CPU usage", 10) if load is not None]
+    checks: list[tuple[str, float | None, tuple[float, float], str]] = [
+        ("CPU", sum(recent) / len(recent) if recent else value(s, "CPU usage"), USAGE_LEVELS, "%"),
+        ("RAM", value(s, "RAM usage"), USAGE_LEVELS, "%"),
+        ("CPU", value(s, "CPU temperature"), TEMP_LEVELS, "°C"),
+    ]
+    checks += [(f"GPU {index + 1}", value(s, f"GPU {name} temperature"), TEMP_LEVELS, "°C")
+               for index, name in enumerate(gpu_cards(s))]
+    checks.append(("Disk", value(s, "Root disk usage"), DISK_LEVELS, "% full"))
+    state = s.metrics.get("Battery state")
+    if state is not None and state.value == "Discharging":
+        checks.append(("Battery", value(s, "Battery charge"), BATTERY_LEVELS, "%"))
+    alerts = [(level, f"{label} {current:.0f} {unit}") for label, current, levels, unit in checks
+              if current is not None and (level := severity(current, levels))]
+    return sorted(alerts, key=lambda alert: alert[0] != "crit")
 
 
 def terminal_size() -> tuple[int, int] | None:
@@ -586,22 +670,22 @@ class MonitorApp(App):
         ("q", "quit", "Quit"),
     ]
     CSS = f"""
-    Screen {{ layout: vertical; background: #0f141a; color: {TEXT}; }}
-    Footer {{ background: #151c24; }}
-    #stamp {{ height: 1; padding: 0 1; background: #151c24; }}
+    Screen {{ layout: vertical; background: {PAGE}; color: {TEXT}; }}
+    Footer {{ background: {SURFACE}; }}
+    #stamp {{ height: 1; padding: 0 1; background: {PAGE}; }}
     #cards {{ layout: grid; grid-size: 4 2; grid-rows: 1fr; grid-gutter: 0 1; padding: 0 1; }}
-    .card {{ height: 100%; width: 100%; background: #131a21;
-             border: round #2a3642; border-title-align: left;
+    .card {{ height: 100%; width: 100%; background: {SURFACE};
+             border: round {BORDER}; border-title-align: left;
              border-subtitle-align: right; padding: 0 1; }}
     #throughput {{ height: 2; padding: 0 1; display: none; }}
     #views {{ height: 1fr; }}
     TabPane {{ height: 1fr; padding: 0; }}
     #sort_info {{ height: 1; padding: 0 1; color: {LABEL}; }}
-    #process_table {{ height: 1fr; background: #0f141a; }}
-    #process_table > .datatable--header {{ background: #151c24; color: {LABEL}; text-style: bold; }}
-    #process_table > .datatable--even-row {{ background: #121820; }}
-    #process_table > .datatable--odd-row {{ background: #0f141a; }}
-    #process_table > .datatable--cursor {{ background: #22364a; }}
+    #process_table {{ height: 1fr; background: {PAGE}; }}
+    #process_table > .datatable--header {{ background: {SURFACE}; color: {LABEL}; text-style: bold; }}
+    #process_table > .datatable--even-row {{ background: {mix(SURFACE, PAGE, 0.5)}; }}
+    #process_table > .datatable--odd-row {{ background: {PAGE}; }}
+    #process_table > .datatable--cursor {{ background: {mix(ACCENT, PAGE, 0.3)}; }}
     .details {{ height: 1fr; overflow: auto; padding: 1 2; }}
     Screen.compact #cards {{ grid-size: 2 3; grid-gutter: 0 2; }}
     Screen.compact .card {{ border: none; padding: 0 1; }}
@@ -612,6 +696,11 @@ class MonitorApp(App):
 
     def __init__(self, collector: Collector | None = None) -> None:
         super().__init__()
+        # Tabs, footer keys, and scrollbars follow the same palette.
+        self.register_theme(Theme(
+            name="sysvigil", primary=ACCENT, accent=ACCENT, foreground=TEXT, background=PAGE,
+            surface=SURFACE, panel=SURFACE, success=GOOD, warning=WARN, error=CRIT, dark=True))
+        self.theme = "sysvigil"
         self.collector = collector or Collector()
         self.history = History(HISTORY_SECONDS)
         self.latest: Snapshot | None = None
@@ -621,6 +710,7 @@ class MonitorApp(App):
         self._primed = False
         self._sampling = False
         self._sample_error: str | None = None
+        self._beat = True
         uname = os.uname()
         self._host = f"{uname.nodename} · Linux {uname.release.split('-')[0]}"
 
@@ -770,6 +860,7 @@ class MonitorApp(App):
 
     def apply_snapshot(self, snapshot: Snapshot) -> None:
         self._sample_error = None
+        self._beat = not self._beat
         self.latest = snapshot
         self.history.add(snapshot)
         self.render_overview()
@@ -789,22 +880,39 @@ class MonitorApp(App):
             metric_table(self.latest, names, group == "sources", metrics))
 
     def render_stamp(self) -> None:
-        stamp = Text()
-        stamp.append("▍", style=f"bold {ACCENTS['cpu']}")
-        stamp.append("sysvigil", style=f"bold {TEXT}")
-        stamp.append(f"   {self._host}", style=LABEL)
+        """Eye (it blinks with each sample), host, what needs attention, clock."""
+        name = Text.assemble(("◉" if self._beat else "◎", f"bold {ACCENT}"), " ", ("sysvigil", f"bold {TEXT}"))
         uptime = value(self.latest, "Uptime") if self.latest else None
-        if uptime is not None:
-            stamp.append(f"   up {duration(uptime)}", style=LABEL)
+        host = Text(f"   {self._host}" + (f" · up {duration(uptime)}" if uptime is not None else ""),
+                    style=MUTED)
+        watch = Text()
+        if self.latest is not None:
+            alerts = watch_alerts(self.latest, self.history)
+            for level, text in alerts:
+                if watch.cell_len:
+                    watch.append("  ")
+                watch.append_text(flagged(text, level))
+            if not alerts:
+                watch.append("● all quiet", style=GOOD)
         if self._sample_error is not None:
-            right = Text(f"sampling failed · {self._sample_error}", style=CRIT)
+            clock = short = Text(f"sampling failed · {self._sample_error}", style=CRIT)
         elif self.latest is None:
-            right = Text("collecting first sample…", style=LABEL)
+            clock = short = Text("collecting first sample…", style=MUTED)
         else:
             now = datetime.fromtimestamp(self.latest.timestamp).astimezone()
-            right = Text(f"1 s refresh   {now:%H:%M:%S %Z}", style=LABEL)
-        right.truncate(max(1, self.size.width - 4 - stamp.cell_len), overflow="ellipsis")
-        stamp.append(" " * max(2, self.size.width - 2 - stamp.cell_len - right.cell_len))
+            clock = Text(f"1 s refresh   {now:%H:%M:%S %Z}", style=MUTED)
+            short = Text(f"{now:%H:%M:%S}", style=MUTED)
+        # Narrow terminals drop the refresh note, then the host, before alerts.
+        room = self.size.width - 2
+        for host_part, clock_part in ((host, clock), (host, short), (Text(), short)):
+            if name.cell_len + host_part.cell_len + watch.cell_len + clock_part.cell_len + 6 <= room:
+                break
+        clock_part.truncate(max(1, room - name.cell_len - 3), overflow="ellipsis")
+        watch.truncate(max(0, room - name.cell_len - host_part.cell_len - clock_part.cell_len - 6),
+                       overflow="ellipsis")
+        right = Text.assemble(watch, "   " if watch.cell_len else "", clock_part)
+        stamp = Text.assemble(name, host_part)
+        stamp.append(" " * max(1, room - stamp.cell_len - right.cell_len))
         stamp.append_text(right)
         self.query_one("#stamp", Static).update(stamp)
 
@@ -820,29 +928,33 @@ class MonitorApp(App):
             read, write = human_rate(value(snapshot, "Disk read")), human_rate(value(snapshot, "Disk write"))
             receive, send = human_rate(value(snapshot, "Network receive")), human_rate(value(snapshot, "Network send"))
             io = Text()
-            io.append("DISK ", style=f"bold {ACCENTS['disk']}")
-            io.append(f"↓{read} ↑{write}   ")
-            io.append("NET ", style=f"bold {ACCENTS['net']}")
-            io.append(f"↓{receive} ↑{send}\n")
-            io.append(f"/ free {number(snapshot, 'Root disk free')} GiB   ", style=LABEL)
-            io.append("disk ", style=LABEL)
-            io.append(sparkline(_summed(self.history, "Disk read", "Disk write")[-60:], 12), style=ACCENTS["disk"])
-            io.append("  net ", style=LABEL)
-            io.append(sparkline(_summed(self.history, "Network receive", "Network send")[-60:], 12), style=ACCENTS["net"])
+            io.append(f"{GLYPH} ", style=ACCENT)
+            io.append("DISK ", style=f"bold {LABEL}")
+            io.append(f"↓{read} ↑{write}   ", style=TEXT)
+            io.append(f"{GLYPH} ", style=ACCENT)
+            io.append("NET ", style=f"bold {LABEL}")
+            io.append(f"↓{receive} ↑{send}\n", style=TEXT)
+            io.append("  / free ", style=MUTED)
+            io.append_text(flagged(f"{number(snapshot, 'Root disk free')} GiB",
+                                   severity(value(snapshot, "Root disk usage"), DISK_LEVELS)))
+            io.append("   disk ", style=MUTED)
+            io.append(sparkline(_summed(self.history, "Disk read", "Disk write")[-60:], 12), style=ACCENT)
+            io.append("  net ", style=MUTED)
+            io.append(sparkline(_summed(self.history, "Network receive", "Network send")[-60:], 12), style=ACCENT)
             self.query_one("#throughput", Static).update(io)
 
     def process_cells(self, row: ProcessRow) -> dict[str, str | Text]:
         cpu = Text(f"{row.cpu_percent:.1f}" if row.cpu_percent is not None else "—", justify="right",
                    style=tone(row.cpu_percent, normal=TEXT) if row.cpu_percent is not None else FAINT)
         return {
-            "pid": Text(str(row.pid), style=LABEL),
+            "pid": Text(str(row.pid), style=MUTED),
             "name": Text(row.name, style=f"bold {TEXT}"),
             "user": Text(row.user, style=LABEL),
             "cpu": cpu,
             "memory": Text(human_mib(row.memory_mib), justify="right"),
             "io": Text(human_rate(row.io_mib_s) if row.io_mib_s else "—" if row.io_mib_s is None else "0",
                        justify="right", style=TEXT if row.io_mib_s else FAINT),
-            "command": Text(row.command, style=LABEL) if row.command else Text(f"[{row.name}]", style=FAINT),
+            "command": Text(row.command, style=MUTED) if row.command else Text(f"[{row.name}]", style=FAINT),
         }
 
     def refresh_processes(self) -> None:
@@ -852,7 +964,7 @@ class MonitorApp(App):
         info = Text()
         info.append(f"{len(self.latest.processes)} processes", style=f"bold {TEXT}")
         info.append(f"   sorted by {self.sort_field.upper()} {direction}", style=LABEL)
-        info.append("   c CPU · m RAM · i I/O · p PID · r reverse", style=FAINT)
+        info.append("   c CPU · m RAM · i I/O · p PID · r reverse", style=MUTED)
         self.query_one("#sort_info", Static).update(info)
         table = self.query_one("#process_table", DataTable)
         columns = [key.value for key in table.columns]

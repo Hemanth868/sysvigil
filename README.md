@@ -29,7 +29,21 @@ The top half of the screen holds cards for CPU, memory, both GPUs, battery, temp
 
 The layout follows the terminal size. At 140 columns and about 32 rows or more, eight bordered cards sit in a 4 × 2 grid with filled graphs, and the process table adds User and Command columns. A tall terminal narrower than that uses a 2 × 4 grid. Smaller terminals, down to 80 × 24, use six compact cards with one-line sparklines and a disk/network strip. The terminal size is read from whichever of stdout, stderr, stdin, or `/dev/tty` is a terminal, so the dashboard still fills the window when a shell or tool captures the command's stdout (Textual alone would assume 80 × 24).
 
-Card graphs draw one column per one-second sample, newest on the right, so wider cards show more history (up to five minutes); compact sparklines cover the last 60 seconds. Percentage graphs use a fixed 0–100 % scale, and their rows turn amber above 75 % and red above 90 %. The temperature graph uses a fixed 20–100 °C scale, and disk and network graphs scale from zero to the peak shown in the card's lower border. Values turn amber or red only when utilization is high or battery charge is low. Rates switch units automatically (B/s, KiB/s, MiB/s).
+Card graphs draw one column per one-second sample, newest on the right, so wider cards show more history (up to five minutes); compact sparklines cover the last 60 seconds. Each column is a bright ridge over a soft fill, and a sample past its warning or critical level (below) turns its ridge amber or red. Percentage graphs use a fixed 0–100 % scale, the temperature graph a fixed 20–100 °C scale, and disk and network graphs scale from zero to the peak shown in the card's lower border. Rates switch units automatically (B/s, KiB/s, MiB/s, GiB/s).
+
+### How it looks
+
+sysvigil keeps watch quietly. Everything is drawn in one violet on dark ink, so any other colour means something needs attention: amber with ▲ for a warning, red with ■ for critical, always next to the value, so the shape carries the meaning without colour too. The ◉ in the header blinks with each sample, and beside the clock the watch line lists what needs attention, worst first, or shows ● all quiet.
+
+| Watched | Warning | Critical |
+| --- | --- | --- |
+| CPU load (last 10 s on the watch line; each sample on the CPU card) | 80 % | 95 % |
+| RAM in use | 80 % | 95 % |
+| CPU and GPU temperature | 85 °C | 95 °C |
+| Root disk full | 90 % | 95 % |
+| Battery charge while discharging | 20 % | 10 % |
+
+A busy GPU is working, not in trouble, so GPU activity never raises an alert.
 
 ## How measurements work
 
