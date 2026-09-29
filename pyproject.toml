@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sysvigil"
+version = "0.1.0"
+description = "Read-only terminal resource monitor for Linux"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["psutil>=5.9", "textual>=0.80,<8"]
+
+[project.urls]
+Repository = "https://github.com/Hemanth868/sysvigil"
+
+[project.scripts]
+sysvigil = "sysvigil.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sysvigil*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

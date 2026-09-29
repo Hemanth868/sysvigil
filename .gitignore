@@ -1,0 +1,9 @@
+.vendor/
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+# Local screenshots from test runs; they show the host process list.
+artifacts/
