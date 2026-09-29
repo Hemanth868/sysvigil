@@ -188,6 +188,29 @@ def test_layout_at_80x24_and_160x45() -> None:
     asyncio.run(check((160, 45)))
 
 
+def test_layout_follows_a_terminal_resize() -> None:
+    async def check() -> None:
+        app = MonitorApp(FakeCollector())
+        async with app.run_test(size=(100, 30)) as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            table = app.query_one("#process_table", DataTable)
+            assert app.screen.has_class("compact")
+            assert len(table.columns) == 5
+            await pilot.resize_terminal(160, 45)
+            await pilot.pause()
+            assert not app.screen.has_class("compact")
+            assert app.query_one("#cards").styles.grid_size_columns == 4
+            assert len(table.columns) == 7
+            assert table.row_count == 12
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            assert app.screen.has_class("compact")
+            assert len(table.columns) == 5
+
+    asyncio.run(check())
+
+
 def test_driver_takes_size_from_the_terminal_even_when_stdout_is_piped(monkeypatch) -> None:
     from textual.drivers.headless_driver import HeadlessDriver
     from textual.drivers.linux_driver import LinuxDriver

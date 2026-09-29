@@ -700,8 +700,14 @@ class MonitorApp(App):
         self.set_interval(1.0, self.sample_in_background)
 
     def on_resize(self) -> None:
+        # App._on_resize stores the new size after this handler returns, so
+        # lay out once it has; self.size is still the old size here.
+        self.call_later(self.apply_terminal_size)
+
+    def apply_terminal_size(self) -> None:
         self.update_layout()
-        if self.is_mounted:
+        # One resize arrives before on_mount, which sets the table up itself.
+        if self.screen.is_mounted:
             self.configure_process_columns()
             self.refresh_processes()
 
